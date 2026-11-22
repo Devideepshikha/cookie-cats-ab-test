@@ -51,3 +51,40 @@ def sample_ratio_check(df):
     observed = [counts[CONTROL], counts[TREATMENT]]
     _, p_value = stats.chisquare(observed)
     return counts.to_dict(), p_value
+
+
+def retention_rates(df):
+    """Share of players in each group who returned after 1 and 7 days."""
+    return df.groupby("version")[METRICS].mean()
+
+
+def two_proportion_ztest(df, metric):
+    """Two-sided z-test for the difference in a retention rate between the groups."""
+    a = df[df["version"] == CONTROL][metric]
+    b = df[df["version"] == TREATMENT][metric]
+    p_a, p_b = a.mean(), b.mean()
+    pooled = (a.sum() + b.sum()) / (len(a) + len(b))
+    se = np.sqrt(pooled * (1 - pooled) * (1 / len(a) + 1 / len(b)))
+    z = (p_a - p_b) / se
+    p_value = 2 * stats.norm.sf(abs(z))
+    return p_a - p_b, z, p_value
+
+
+def bootstrap_difference(df, metric, n_boot=1000, seed=42):
+    """Resample players with replacement and return the gate_30 minus gate_40 difference each time."""
+    rng = np.random.default_rng(seed)
+    a = df[df["version"] == CONTROL][metric].to_numpy(dtype=float)
+    b = df[df["version"] == TREATMENT][metric].to_numpy(dtype=float)
+    diffs = np.empty(n_boot)
+    for i in range(n_boot):
+        diffs[i] = rng.choice(a, len(a)).mean() - rng.choice(b, len(b)).mean()
+    return diffs
+
+
+def engagement_segments(df):
+    """7-day retention by how many rounds players played, for each group."""
+    bins = [-1, 0, 10, 30, 100, np.inf]
+    labels = ["0 rounds", "1-10", "11-30", "31-100", "100+"]
+    seg = df.assign(segment=pd.cut(df["sum_gamerounds"], bins=bins, labels=labels))
+    return seg.pivot_table(index="segment", columns="version", values="retention_7",
+                           aggfunc="mean", observed=False)
