@@ -88,3 +88,69 @@ def engagement_segments(df):
     seg = df.assign(segment=pd.cut(df["sum_gamerounds"], bins=bins, labels=labels))
     return seg.pivot_table(index="segment", columns="version", values="retention_7",
                            aggfunc="mean", observed=False)
+
+
+
+
+def plot_bootstrap(results):
+    CHARTS.mkdir(exist_ok=True)
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    for metric, diffs in results.items():
+        ax.hist(diffs * 100, bins=40, alpha=0.6, label=metric.replace("_", " "))
+    ax.axvline(0, color="black", linewidth=1)
+    ax.set_xlabel("Retention difference, gate_30 minus gate_40 (percentage points)")
+    ax.set_ylabel("Bootstrap samples")
+    ax.set_title("Bootstrap distribution of the retention difference")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(CHARTS / "bootstrap_retention_difference.png", dpi=150)
+    plt.close(fig)
+
+
+def plot_segments(table):
+    CHARTS.mkdir(exist_ok=True)
+    ax = (table * 100).plot(kind="bar", figsize=(8, 4.5), rot=0)
+    ax.set_xlabel("Game rounds played in the first 14 days")
+    ax.set_ylabel("7-day retention (%)")
+    ax.set_title("7-day retention by engagement segment")
+    plt.tight_layout()
+    plt.savefig(CHARTS / "retention_by_segment.png", dpi=150)
+    plt.close()
+
+
+def main():
+    df, notes = clean(load_data())
+    counts, srm_p = sample_ratio_check(df)
+    rates = retention_rates(df)
+
+    lines = ["# Results", "", "## Data checks", ""] + [f"- {n}" for n in notes]
+    lines += [f"- Players per group: {counts[CONTROL]:,} ({CONTROL}) and {counts[TREATMENT]:,} ({TREATMENT}); "
+              f"sample ratio check p = {srm_p:.3f}", "", "## Retention", "",
+              "| Metric | gate_30 | gate_40 | Difference (pp) | z-test p-value | Bootstrap: chance gate_30 is better |",
+              "| --- | --- | --- | --- | --- | --- |"]
+    boot = {}
+    for metric in METRICS:
+        diff, z, p = two_proportion_ztest(df, metric)
+        diffs = bootstrap_difference(df, metric)
+        boot[metric] = diffs
+        lo, hi = np.percentile(diffs, [2.5, 97.5])
+        lines.append(f"| {metric} | {rates.loc[CONTROL, metric]:.2%} | {rates.loc[TREATMENT, metric]:.2%} | "
+                     f"{diff * 100:.2f} (95% CI {lo * 100:.2f} to {hi * 100:.2f}) | {p:.4f} | {(diffs > 0).mean():.1%} |")
+
+    rounds_p = stats.mannwhitneyu(df[df["version"] == CONTROL]["sum_gamerounds"],
+                                  df[df["version"] == TREATMENT]["sum_gamerounds"]).pvalue
+    segments = engagement_segments(df)
+    lines += ["", f"Game rounds played (Mann-Whitney U test): p = {rounds_p:.3f}", "",
+              "## 7-day retention by engagement segment", "",
+              "| Rounds played | gate_30 | gate_40 |", "| --- | --- | --- |"]
+    lines += [f"| {seg} | {row[CONTROL]:.1%} | {row[TREATMENT]:.1%} |" for seg, row in segments.iterrows()]
+
+    plot_bootstrap(boot)
+    plot_segments(segments)
+    Path("results.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print("\n".join(lines))
+    print("\nCharts saved to charts/, summary saved to results.md")
+
+
+if __name__ == "__main__":
+    main()
